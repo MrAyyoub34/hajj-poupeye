@@ -306,7 +306,29 @@ async function flushQ(){
   }
   flushing = false;
 }
-window.addEventListener("online", flushQ);
+window.addEventListener("online", ()=>{ flushQ(); pullSheet(); });
+// Pull what's in the sheet: brings back sales missing here (cleared cache, other device)
+// and the menu when this device has none. Local data always wins otherwise.
+async function pullSheet(){
+  if(!sheetOn() || mode!=="local" || navigator.onLine===false) return;
+  try{
+    const r = await fetch(SHEET_URL + "?secret=" + encodeURIComponent(SHEET_SECRET) + "&t=" + Date.now());
+    const d = await r.json(); if(!d || !d.ok) return;
+    let added = 0, menu = false;
+    const pendingDel = new Set(loadQ().filter(m=>m.type==="delete").map(m=>m.id));
+    const have = new Set(state.sales.map(x=>x.id));
+    (d.sales||[]).forEach(x=>{
+      if(x && x.id && !have.has(x.id) && !pendingDel.has(x.id) && Array.isArray(x.lines)){ state.sales.push(x); added++; }
+    });
+    if(!state.items.length && (d.items||[]).length){
+      state.items = d.items.map((it,i)=>({ id:uid(), name:String(it.name), price:Number(it.price)||0, order:i })); menu = true;
+    }
+    if(added || menu){
+      saveLocal(); render();
+      toast(added ? `${added} vente${added>1?"s":""} récupérée${added>1?"s":""} depuis Google Sheets` : "Menu récupéré depuis Google Sheets");
+    }
+  }catch(e){}
+}
 setInterval(flushQ, 60000);
 
 let state = { items:[], sales:[], shop:{name:"", currency:"DH"} };
@@ -350,7 +372,7 @@ async function putShop(shop){
 function dbFail(e){
   // Can't write to the shared store: keep working on this device.
   mode = "local"; loadLocal(); render();
-flushQ();
+flushQ(); pullSheet();
 $("#syncAll").onclick = async ()=>{
   if(!sheetOn()){ toast("Google Sheets n’est pas encore configuré"); return; }
   if(!(await ask(`Envoyer les ${state.sales.length} ventes vers Google Sheets\u202f?`, {ok:"Envoyer"}))) return;
