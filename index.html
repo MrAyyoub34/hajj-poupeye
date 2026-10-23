@@ -238,7 +238,7 @@ label.lb{display:block;font-size:.88rem;color:var(--muted);margin:14px 0 4px}
       <button class="btn ghost" id="pullAll">Récupérer depuis Google Sheets</button>
       <button class="btn ghost" id="syncAll">Tout envoyer vers Google Sheets (menu + ventes)</button>
     </div>
-    <p class="note" style="margin-top:24px;text-align:center">Version 1.9</p>
+    <p class="note" style="margin-top:24px;text-align:center">Version 2.0</p>
   </section>
 </div>
 
@@ -361,8 +361,9 @@ async function pullSheet(manual){
 
     const sigS = arr => JSON.stringify(arr.slice().sort((x,y)=>x.id<y.id?-1:1).map(x=>[x.id,x.at,x.total,x.client||"",!!x.free,x.lines.map(l=>[l.name,l.qty,l.price])]));
     const sigI = arr => JSON.stringify(arr.slice().sort((x,y)=>(x.order||0)-(y.order||0)).map(x=>[x.name,x.price]));
-    if(sigS(nextSales)!==sigS(state.sales) || sigI(nextItems)!==sigI(state.items)){
-      state.sales = nextSales; state.items = nextItems;
+    const nextAdj = d.adjust || {};
+    if(sigS(nextSales)!==sigS(state.sales) || sigI(nextItems)!==sigI(state.items) || JSON.stringify(nextAdj)!==JSON.stringify(state.adjust||{})){
+      state.sales = nextSales; state.items = nextItems; state.adjust = nextAdj;
       Object.keys(order).forEach(id=>{ if(!state.items.find(x=>x.id===id)) delete order[id]; });
       saveLocal(); render();
       toast("Mis à jour depuis Google Sheets");
@@ -381,7 +382,7 @@ let db = null;
 /* ---------- local storage ---------- */
 function loadLocal(){
   try{ const raw = localStorage.getItem(LS); if(raw){ const d = JSON.parse(raw);
-    state.items = d.items||[]; state.sales = d.sales||[]; state.shop = Object.assign({name:"",currency:"DH"}, d.shop||{}); } }catch(e){}
+    state.items = d.items||[]; state.sales = d.sales||[]; state.adjust = d.adjust||{}; state.shop = Object.assign({name:"",currency:"DH"}, d.shop||{}); } }catch(e){}
 }
 function saveLocal(){ try{ localStorage.setItem(LS, JSON.stringify(state)); }catch(e){ toast("Impossible d’enregistrer sur cet appareil"); } }
 
@@ -433,6 +434,8 @@ const GOAL = 10;
 const ckey = n => (n||"").trim().toLowerCase().replace(/\s+/g," ");
 function clients(){
   const m = {};
+  // Starting points typed in the sheet's "Ajustement" column (e.g. loyalty from before the app)
+  Object.entries(state.adjust||{}).forEach(([k,v])=>{ const n = Number(v.adj)||0; if(n) m[k] = {name:v.name, stamps:n, total:n, free:0, last:0}; });
   state.sales.slice().sort((a,b)=>a.at-b.at).forEach(s=>{
     const k = ckey(s.client); if(!k) return;
     const c = m[k] || (m[k] = {name:s.client.trim(), stamps:0, total:0, free:0, last:0});
