@@ -289,20 +289,20 @@ function menuMsg(items){
 function queueMenu(items){
   if(!sheetOn()) return;
   const q = loadQ();
-  if(q.length && q[q.length-1].type==="menu" && !flushing) q.pop();   // only the latest menu matters
+  if(q.length>1 && q[q.length-1].type==="menu") q.pop();   // only the latest menu matters (never the one being sent)
   q.push(menuMsg(items)); saveQ(q); flushQ();
 }
 async function flushQ(){
   if(!sheetOn() || flushing || navigator.onLine===false) return;
   flushing = true;
-  let q = loadQ();
-  while(q.length){
+  while(true){
+    const q = loadQ(); if(!q.length) break;   // re-read each time: new messages may have been added meanwhile
     try{
       await fetch(SHEET_URL, { method:"POST", mode:"no-cors",
         headers:{ "Content-Type":"text/plain;charset=utf-8" },
         body: JSON.stringify(Object.assign({}, q[0], { secret:SHEET_SECRET })) });
-      q.shift(); saveQ(q);
     }catch(e){ break; }   // offline: retry later
+    const after = loadQ(); after.shift(); saveQ(after);
   }
   flushing = false;
 }
