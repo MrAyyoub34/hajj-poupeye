@@ -233,11 +233,12 @@ label.lb{display:block;font-size:.88rem;color:var(--muted);margin:14px 0 4px}
 
     <h2 style="margin-top:28px">Google Sheets</h2>
     <p class="note" id="backupNote">Le menu et les ventes sont enregistrés dans Google Sheets et récupérés automatiquement à l’ouverture.</p>
+    <p class="note" id="syncStatus"></p>
     <div class="actions">
       <button class="btn ghost" id="pullAll">Récupérer depuis Google Sheets</button>
       <button class="btn ghost" id="syncAll">Tout envoyer vers Google Sheets (menu + ventes)</button>
     </div>
-    <p class="note" style="margin-top:24px;text-align:center">Version 1.8</p>
+    <p class="note" style="margin-top:24px;text-align:center">Version 1.9</p>
   </section>
 </div>
 
@@ -292,24 +293,31 @@ function queueMenu(items){
   if(q.length>1 && q[q.length-1].type==="menu") q.pop();   // only the latest menu matters (never the one being sent)
   q.push(menuMsg(items)); saveQ(q); flushQ();
 }
+let syncInfo = { at:0, err:"" };
+function renderSync(){
+  const el = document.getElementById("syncStatus"); if(!el) return;
+  const n = loadQ().length;
+  const t = syncInfo.at ? new Date(syncInfo.at).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"}) : "jamais";
+  el.textContent = (syncInfo.err ? "⚠️ " + syncInfo.err + ". " : "") + "Dernière synchro : " + t + ". En attente d’envoi : " + n + ".";
+}
+function sheetGet(params){
+  const qs = Object.entries(Object.assign({ secret:SHEET_SECRET, t:Date.now() }, params))
+    .map(([k,v])=>k+"="+encodeURIComponent(v)).join("&");
+  return fetch(SHEET_URL + "?" + qs).then(r=>r.json());
+}
 async function flushQ(){
   if(!sheetOn() || flushing || navigator.onLine===false) return;
   flushing = true;
   while(true){
     const q = loadQ(); if(!q.length) break;   // re-read each time: new messages may have been added meanwhile
     let d = null;
-    try{
-      // plain-text body = no CORS preflight, and Google's answer can be read to confirm the save
-      const r = await fetch(SHEET_URL, { method:"POST", body: JSON.stringify(Object.assign({}, q[0], { secret:SHEET_SECRET })) });
-      d = await r.json();
-    }catch(e){ break; }   // offline or Google unreachable: keep it queued, retry later
-    if(!d || !d.ok){
-      if(!flushQ.warned){ flushQ.warned = true; toast("Google Sheets refuse l’envoi : vérifiez le mot secret"); }
-      break;
-    }
+    try{ d = await sheetGet({ payload: JSON.stringify(q[0]) }); }   // same request type as reading: confirmed by Google
+    catch(e){ syncInfo.err = "Envoi impossible (connexion)"; break; }
+    if(!d || !d.ok){ syncInfo.err = "Google Sheets refuse l’envoi" + (d && d.error ? " (" + d.error + ")" : ""); break; }
     const after = loadQ(); after.shift(); saveQ(after);   // confirmed saved: drop it
+    syncInfo.err = ""; syncInfo.at = Date.now();
   }
-  flushing = false;
+  flushing = false; renderSync();
 }
 window.addEventListener("online", ()=>pullSheet());
 document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible") pullSheet(); });
@@ -325,9 +333,9 @@ async function pullSheet(manual){
   pulling = true;
   try{
     await flushQ();   // send local changes first
-    const r = await fetch(SHEET_URL + "?secret=" + encodeURIComponent(SHEET_SECRET) + "&t=" + Date.now());
-    const d = await r.json();
-    if(!d || !d.ok){ if(manual) toast("Google Sheets a refusé : " + ((d && d.error) || "erreur")); return; }
+    const d = await sheetGet({});
+    if(!d || !d.ok){ syncInfo.err = "Lecture refusée (" + ((d && d.error) || "erreur") + ")"; renderSync(); if(manual) toast("Google Sheets a refusé : " + ((d && d.error) || "erreur")); return; }
+    syncInfo.at = Date.now(); if(!loadQ().length) syncInfo.err = ""; renderSync();
 
     const q = loadQ();
     const pendingSale = new Map(q.filter(m=>m.type==="sale").map(m=>[m.sale.id, m.sale]));
@@ -359,7 +367,7 @@ async function pullSheet(manual){
       saveLocal(); render();
       toast("Mis à jour depuis Google Sheets");
     } else if(manual) toast("Tout est déjà à jour");
-  }catch(e){ if(manual) toast("Impossible de lire Google Sheets"); }
+  }catch(e){ syncInfo.err = "Lecture impossible"; renderSync(); if(manual) toast("Impossible de lire Google Sheets"); }
   finally{ pulling = false; }
 }
 setInterval(flushQ, 60000);
@@ -684,6 +692,9 @@ $("#exportCsv").onclick = ()=>{
 loadLocal(); render();
 
 /* ---------- Google Sheets: boot ---------- */
+// One-time cleanup on upgrade: an old menu stuck in the queue must not overwrite the menu edited in the sheet.
+try{ if(!localStorage.getItem("snacktill:mig19")){ saveQ(loadQ().filter(m=>m.type!=="menu")); localStorage.setItem("snacktill:mig19","1"); } }catch(e){}
+renderSync();
 pullSheet();
 $("#pullAll").onclick = ()=>pullSheet(true);
 $("#syncAll").onclick = async ()=>{
@@ -714,3 +725,4 @@ $("#syncAll").onclick = async ()=>{
 </script>
 </body>
 </html>
+FFFF
