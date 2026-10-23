@@ -239,7 +239,7 @@ label.lb{display:block;font-size:.88rem;color:var(--muted);margin:14px 0 4px}
       <button class="btn ghost" id="syncAll">Tout envoyer vers Google Sheets (menu + ventes)</button>
       <label class="btn ghost" style="display:inline-block">Importer une sauvegarde<input type="file" id="importJson" accept="application/json" hidden></label>
     </div>
-    <p class="note" style="margin-top:24px;text-align:center">Version 1.5</p>
+    <p class="note" style="margin-top:24px;text-align:center">Version 1.6</p>
   </section>
 </div>
 
@@ -277,8 +277,8 @@ const LS = "snacktill:v1";
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,8);
 
 /* ---------- Google Sheets ---------- */
-const SHEET_URL = "https://script.google.com/macros/s/AKfycbxp6s3Zx28jpkOkmTRDohEVyneyp_8LG4w21BWjXUmK-K7Zh9Q7xD35tUiQMMvrvJUn/exec";   // https://script.google.com/macros/s/.../exec
-const SHEET_SECRET = "poupeye2026";                  // same value as SECRET in the Apps Script
+const SHEET_URL = "COLLER_ICI_L_URL_DU_WEB_APP";   // https://script.google.com/macros/s/.../exec
+const SHEET_SECRET = "CHANGE_MOI";                  // same value as SECRET in the Apps Script
 const QK = "snacktill:queue";
 let flushing = false;
 const sheetOn = () => /^https:\/\/script\.google\.com\//.test(SHEET_URL);
@@ -376,15 +376,6 @@ async function putShop(shop){
 function dbFail(e){
   // Can't write to the shared store: keep working on this device.
   mode = "local"; loadLocal(); render();
-flushQ(); pullSheet();
-$("#pullAll").onclick = ()=>pullSheet(true);
-$("#syncAll").onclick = async ()=>{
-  if(!sheetOn()){ toast("Google Sheets n’est pas encore configuré"); return; }
-  if(!(await ask(`Envoyer les ${state.sales.length} ventes vers Google Sheets\u202f?`, {ok:"Envoyer"}))) return;
-  const q = loadQ(); q.push(menuMsg(state.items)); state.sales.slice().sort((a,b)=>a.at-b.at).forEach(s=>q.push({type:"sale", sale:s})); saveQ(q);
-  toast("Envoi en cours…"); flushQ();
-};
-
   toast("Enregistrement sur cet appareil");
 }
 
@@ -679,6 +670,16 @@ $("#importJson").onchange = async e=>{
 
 /* ---------- boot ---------- */
 loadLocal(); render();
+
+/* ---------- Google Sheets: boot ---------- */
+flushQ(); pullSheet();
+$("#pullAll").onclick = ()=>pullSheet(true);
+$("#syncAll").onclick = async ()=>{
+  if(!sheetOn()){ toast("Google Sheets n’est pas encore configuré"); return; }
+  if(!(await ask(`Envoyer les ${state.sales.length} ventes vers Google Sheets\u202f?`, {ok:"Envoyer"}))) return;
+  const q = loadQ(); q.push(menuMsg(state.items)); state.sales.slice().sort((a,b)=>a.at-b.at).forEach(s=>q.push({type:"sale", sale:s})); saveQ(q);
+  toast("Envoi en cours…"); flushQ();
+};
 
 (async ()=>{
   if(!window.claude || !claude.use) return;
