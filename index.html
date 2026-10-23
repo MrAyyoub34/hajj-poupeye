@@ -235,9 +235,11 @@ label.lb{display:block;font-size:.88rem;color:var(--muted);margin:14px 0 4px}
     <p class="note" id="backupNote">Les ventes sont gardées dans ce navigateur. Exportez une sauvegarde de temps en temps pour ne rien perdre si le téléphone est réinitialisé.</p>
     <div class="actions">
       <button class="btn ghost" id="exportJson">Exporter une sauvegarde</button>
+      <button class="btn ghost" id="pullAll">Récupérer depuis Google Sheets</button>
       <button class="btn ghost" id="syncAll">Tout envoyer vers Google Sheets (menu + ventes)</button>
       <label class="btn ghost" style="display:inline-block">Importer une sauvegarde<input type="file" id="importJson" accept="application/json" hidden></label>
     </div>
+    <p class="note" style="margin-top:24px;text-align:center">Version 1.5</p>
   </section>
 </div>
 
@@ -309,16 +311,18 @@ async function flushQ(){
 window.addEventListener("online", ()=>{ flushQ(); pullSheet(); });
 // Pull what's in the sheet: brings back sales missing here (cleared cache, other device)
 // and the menu when this device has none. Local data always wins otherwise.
-async function pullSheet(){
-  if(!sheetOn() || mode!=="local" || navigator.onLine===false) return;
+async function pullSheet(manual){
+  if(!sheetOn()){ if(manual) toast("Google Sheets n’est pas configuré dans index.html"); return; }
+  if(mode!=="local" || navigator.onLine===false){ if(manual) toast("Pas de connexion internet"); return; }
   try{
     const r = await fetch(SHEET_URL + "?secret=" + encodeURIComponent(SHEET_SECRET) + "&t=" + Date.now());
-    const d = await r.json(); if(!d || !d.ok) return;
+    const d = await r.json();
+    if(!d || !d.ok){ if(manual) toast("Google Sheets a refusé : " + ((d && d.error) || "erreur")); return; }
     let added = 0, menu = false;
     const pendingDel = new Set(loadQ().filter(m=>m.type==="delete").map(m=>m.id));
     const have = new Set(state.sales.map(x=>x.id));
     (d.sales||[]).forEach(x=>{
-      if(x && x.id && !have.has(x.id) && !pendingDel.has(x.id) && Array.isArray(x.lines)){ state.sales.push(x); added++; }
+      if(x && x.id && !have.has(x.id) && !pendingDel.has(x.id) && Array.isArray(x.lines) && x.lines.length && Number.isFinite(x.at)){ state.sales.push(x); added++; }
     });
     if(!state.items.length && (d.items||[]).length){
       state.items = d.items.map((it,i)=>({ id:uid(), name:String(it.name), price:Number(it.price)||0, order:i })); menu = true;
@@ -326,8 +330,8 @@ async function pullSheet(){
     if(added || menu){
       saveLocal(); render();
       toast(added ? `${added} vente${added>1?"s":""} récupérée${added>1?"s":""} depuis Google Sheets` : "Menu récupéré depuis Google Sheets");
-    }
-  }catch(e){}
+    } else if(manual) toast("Tout est déjà à jour");
+  }catch(e){ if(manual) toast("Impossible de lire Google Sheets"); }
 }
 setInterval(flushQ, 60000);
 
@@ -373,6 +377,7 @@ function dbFail(e){
   // Can't write to the shared store: keep working on this device.
   mode = "local"; loadLocal(); render();
 flushQ(); pullSheet();
+$("#pullAll").onclick = ()=>pullSheet(true);
 $("#syncAll").onclick = async ()=>{
   if(!sheetOn()){ toast("Google Sheets n’est pas encore configuré"); return; }
   if(!(await ask(`Envoyer les ${state.sales.length} ventes vers Google Sheets\u202f?`, {ok:"Envoyer"}))) return;
