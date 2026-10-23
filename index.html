@@ -231,15 +231,13 @@ label.lb{display:block;font-size:.88rem;color:var(--muted);margin:14px 0 4px}
     </form>
     <div id="exampleWrap" class="actions"><button class="btn ghost" id="addExamples">Ajouter des exemples</button></div>
 
-    <h2 style="margin-top:28px">Sauvegarde</h2>
-    <p class="note" id="backupNote">Les ventes sont gardées dans ce navigateur. Exportez une sauvegarde de temps en temps pour ne rien perdre si le téléphone est réinitialisé.</p>
+    <h2 style="margin-top:28px">Google Sheets</h2>
+    <p class="note" id="backupNote">Le menu et les ventes sont enregistrés dans Google Sheets et récupérés automatiquement à l’ouverture.</p>
     <div class="actions">
-      <button class="btn ghost" id="exportJson">Exporter une sauvegarde</button>
       <button class="btn ghost" id="pullAll">Récupérer depuis Google Sheets</button>
       <button class="btn ghost" id="syncAll">Tout envoyer vers Google Sheets (menu + ventes)</button>
-      <label class="btn ghost" style="display:inline-block">Importer une sauvegarde<input type="file" id="importJson" accept="application/json" hidden></label>
     </div>
-    <p class="note" style="margin-top:24px;text-align:center">Version 1.6</p>
+    <p class="note" style="margin-top:24px;text-align:center">Version 1.8</p>
   </section>
 </div>
 
@@ -299,39 +297,70 @@ async function flushQ(){
   flushing = true;
   while(true){
     const q = loadQ(); if(!q.length) break;   // re-read each time: new messages may have been added meanwhile
+    let d = null;
     try{
-      await fetch(SHEET_URL, { method:"POST", mode:"no-cors",
-        headers:{ "Content-Type":"text/plain;charset=utf-8" },
-        body: JSON.stringify(Object.assign({}, q[0], { secret:SHEET_SECRET })) });
-    }catch(e){ break; }   // offline: retry later
-    const after = loadQ(); after.shift(); saveQ(after);
+      // plain-text body = no CORS preflight, and Google's answer can be read to confirm the save
+      const r = await fetch(SHEET_URL, { method:"POST", body: JSON.stringify(Object.assign({}, q[0], { secret:SHEET_SECRET })) });
+      d = await r.json();
+    }catch(e){ break; }   // offline or Google unreachable: keep it queued, retry later
+    if(!d || !d.ok){
+      if(!flushQ.warned){ flushQ.warned = true; toast("Google Sheets refuse l’envoi : vérifiez le mot secret"); }
+      break;
+    }
+    const after = loadQ(); after.shift(); saveQ(after);   // confirmed saved: drop it
   }
   flushing = false;
 }
-window.addEventListener("online", ()=>{ flushQ(); pullSheet(); });
+window.addEventListener("online", ()=>pullSheet());
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible") pullSheet(); });
 // Pull what's in the sheet: brings back sales missing here (cleared cache, other device)
 // and the menu when this device has none. Local data always wins otherwise.
+// The sheet is the master copy: what's in it (including edits made by hand) is what the app shows.
+// Local changes not yet confirmed by Google are kept on top so nothing is lost.
+let pulling = false;
 async function pullSheet(manual){
   if(!sheetOn()){ if(manual) toast("Google Sheets n’est pas configuré dans index.html"); return; }
   if(mode!=="local" || navigator.onLine===false){ if(manual) toast("Pas de connexion internet"); return; }
+  if(pulling) return;
+  pulling = true;
   try{
+    await flushQ();   // send local changes first
     const r = await fetch(SHEET_URL + "?secret=" + encodeURIComponent(SHEET_SECRET) + "&t=" + Date.now());
     const d = await r.json();
     if(!d || !d.ok){ if(manual) toast("Google Sheets a refusé : " + ((d && d.error) || "erreur")); return; }
-    let added = 0, menu = false;
-    const pendingDel = new Set(loadQ().filter(m=>m.type==="delete").map(m=>m.id));
-    const have = new Set(state.sales.map(x=>x.id));
-    (d.sales||[]).forEach(x=>{
-      if(x && x.id && !have.has(x.id) && !pendingDel.has(x.id) && Array.isArray(x.lines) && x.lines.length && Number.isFinite(x.at)){ state.sales.push(x); added++; }
-    });
-    if(!state.items.length && (d.items||[]).length){
-      state.items = d.items.map((it,i)=>({ id:uid(), name:String(it.name), price:Number(it.price)||0, order:i })); menu = true;
+
+    const q = loadQ();
+    const pendingSale = new Map(q.filter(m=>m.type==="sale").map(m=>[m.sale.id, m.sale]));
+    const pendingDel = new Set(q.filter(m=>m.type==="delete").map(m=>m.id));
+    const pendingMenu = q.some(m=>m.type==="menu");
+
+    const sheetSales = (d.sales||[]).filter(x=>x && x.id && Array.isArray(x.lines) && x.lines.length && Number.isFinite(x.at));
+    const sheetItems = (d.items||[]).filter(it=>it && String(it.name).trim());
+
+    // Safety: an empty sheet never wipes a phone that has data. Send the phone's data up instead.
+    if(!sheetSales.length && !sheetItems.length && (state.sales.length || state.items.length)){
+      const q2 = loadQ(); q2.push(menuMsg(state.items)); state.sales.forEach(x=>q2.push({type:"sale", sale:x})); saveQ(q2);
+      flushQ(); if(manual) toast("La feuille est vide : envoi des données du téléphone");
+      return;
     }
-    if(added || menu){
+
+    const nextSales = sheetSales.filter(x=>!pendingDel.has(x.id) && !pendingSale.has(x.id)).concat([...pendingSale.values()]);
+    let nextItems = state.items;
+    if(d.menu && !pendingMenu){
+      nextItems = sheetItems.map((it,i)=>{ const ex = state.items.find(x=>x.name===it.name);
+        return { id: ex ? ex.id : uid(), name:String(it.name).trim(), price:Number(it.price)||0, order:i }; });
+    }
+
+    const sigS = arr => JSON.stringify(arr.slice().sort((x,y)=>x.id<y.id?-1:1).map(x=>[x.id,x.at,x.total,x.client||"",!!x.free,x.lines.map(l=>[l.name,l.qty,l.price])]));
+    const sigI = arr => JSON.stringify(arr.slice().sort((x,y)=>(x.order||0)-(y.order||0)).map(x=>[x.name,x.price]));
+    if(sigS(nextSales)!==sigS(state.sales) || sigI(nextItems)!==sigI(state.items)){
+      state.sales = nextSales; state.items = nextItems;
+      Object.keys(order).forEach(id=>{ if(!state.items.find(x=>x.id===id)) delete order[id]; });
       saveLocal(); render();
-      toast(added ? `${added} vente${added>1?"s":""} récupérée${added>1?"s":""} depuis Google Sheets` : "Menu récupéré depuis Google Sheets");
+      toast("Mis à jour depuis Google Sheets");
     } else if(manual) toast("Tout est déjà à jour");
   }catch(e){ if(manual) toast("Impossible de lire Google Sheets"); }
+  finally{ pulling = false; }
 }
 setInterval(flushQ, 60000);
 
@@ -423,9 +452,6 @@ function render(){
   $("#shopName").firstChild.nodeValue = "Hajj Poupeye";
   document.title = "Hajj Poupeye";
   $("#modeNote").textContent = mode==="db" ? "Synchronisé avec votre compte" : "Enregistré sur cet appareil";
-  $("#backupNote").textContent = mode==="db"
-    ? "Les ventes sont synchronisées avec votre compte et visibles sur tout appareil où vous ouvrez cette page. Une sauvegarde reste utile pour vos archives."
-    : "Les ventes sont gardées dans ce navigateur. Exportez une sauvegarde de temps en temps pour ne rien perdre si le téléphone est réinitialisé.";
 
   const sod = startOfDay(Date.now());
   const today = state.sales.filter(s=>s.at>=sod);
@@ -653,32 +679,18 @@ $("#exportCsv").onclick = ()=>{
     s.lines.forEach(l=>rows.push([d.toLocaleDateString("en-CA"), d.toTimeString().slice(0,5), l.name, l.qty, l.price, s.free?0:l.qty*l.price, s.total, s.client||"", s.id])); });
   giveFile(`ventes-${period}-${stamp()}.csv`, "\ufeff"+rows.map(r=>r.map(q).join(";")).join("\n"), "text/csv");
 };
-$("#exportJson").onclick = ()=> giveFile(`hajj-poupeye-sauvegarde-${stamp()}.json`, JSON.stringify(state,null,1), "application/json");
-$("#importJson").onchange = async e=>{
-  const f = e.target.files[0]; if(!f) return;
-  try{
-    const d = JSON.parse(await f.text());
-    if(!Array.isArray(d.items)||!Array.isArray(d.sales)) throw 0;
-    if(!(await ask(`Importer ${d.items.length} produits et ${d.sales.length} ventes\u202f? Les enregistrements avec le même identifiant seront remplacés.`, {ok:"Importer"}))) return;
-    for(const it of d.items) await putItem(it);
-    for(const s of d.sales) await putSale(s);
-    if(d.shop) await putShop(d.shop);
-    toast("Sauvegarde importée");
-  }catch(_){ toast("Ce fichier n’est pas une sauvegarde Hajj Poupeye"); }
-  e.target.value="";
-};
 
 /* ---------- boot ---------- */
 loadLocal(); render();
 
 /* ---------- Google Sheets: boot ---------- */
-flushQ(); pullSheet();
+pullSheet();
 $("#pullAll").onclick = ()=>pullSheet(true);
 $("#syncAll").onclick = async ()=>{
   if(!sheetOn()){ toast("Google Sheets n’est pas encore configuré"); return; }
   if(!(await ask(`Envoyer les ${state.sales.length} ventes vers Google Sheets\u202f?`, {ok:"Envoyer"}))) return;
   const q = loadQ(); q.push(menuMsg(state.items)); state.sales.slice().sort((a,b)=>a.at-b.at).forEach(s=>q.push({type:"sale", sale:s})); saveQ(q);
-  toast("Envoi en cours…"); flushQ();
+  toast("Envoi en cours…"); await flushQ(); toast(loadQ().length ? "Envoi incomplet, nouvel essai plus tard" : "Tout est envoyé");
 };
 
 (async ()=>{
