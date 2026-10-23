@@ -235,7 +235,7 @@ label.lb{display:block;font-size:.88rem;color:var(--muted);margin:14px 0 4px}
     <p class="note" id="backupNote">Les ventes sont gardées dans ce navigateur. Exportez une sauvegarde de temps en temps pour ne rien perdre si le téléphone est réinitialisé.</p>
     <div class="actions">
       <button class="btn ghost" id="exportJson">Exporter une sauvegarde</button>
-      <button class="btn ghost" id="syncAll">Tout envoyer vers Google Sheets</button>
+      <button class="btn ghost" id="syncAll">Tout envoyer vers Google Sheets (menu + ventes)</button>
       <label class="btn ghost" style="display:inline-block">Importer une sauvegarde<input type="file" id="importJson" accept="application/json" hidden></label>
     </div>
   </section>
@@ -283,6 +283,15 @@ const sheetOn = () => /^https:\/\/script\.google\.com\//.test(SHEET_URL);
 function loadQ(){ try{ return JSON.parse(localStorage.getItem(QK)||"[]"); }catch(e){ return []; } }
 function saveQ(q){ try{ localStorage.setItem(QK, JSON.stringify(q)); }catch(e){} }
 function queuePush(msg){ if(!sheetOn()) return; const q = loadQ(); q.push(msg); saveQ(q); flushQ(); }
+function menuMsg(items){
+  return { type:"menu", items: items.slice().sort((a,b)=>(a.order||0)-(b.order||0) || a.name.localeCompare(b.name)).map(i=>({name:i.name, price:i.price})) };
+}
+function queueMenu(items){
+  if(!sheetOn()) return;
+  const q = loadQ();
+  if(q.length && q[q.length-1].type==="menu" && !flushing) q.pop();   // only the latest menu matters
+  q.push(menuMsg(items)); saveQ(q); flushQ();
+}
 async function flushQ(){
   if(!sheetOn() || flushing || navigator.onLine===false) return;
   flushing = true;
@@ -315,10 +324,12 @@ function saveLocal(){ try{ localStorage.setItem(LS, JSON.stringify(state)); }cat
 
 /* ---------- persistence layer ---------- */
 async function putItem(it){
+  queueMenu(state.items.filter(x=>x.id!==it.id).concat([it]));
   if(mode==="db"){ try{ await db.collection("items").doc(it.id).set(it); return; }catch(e){ dbFail(e); } }
   const i = state.items.findIndex(x=>x.id===it.id); if(i>=0) state.items[i]=it; else state.items.push(it); saveLocal(); render();
 }
 async function removeItem(id){
+  queueMenu(state.items.filter(x=>x.id!==id));
   if(mode==="db"){ try{ await db.collection("items").doc(id).delete(); return; }catch(e){ dbFail(e); } }
   state.items = state.items.filter(x=>x.id!==id); saveLocal(); render();
 }
@@ -343,7 +354,7 @@ flushQ();
 $("#syncAll").onclick = async ()=>{
   if(!sheetOn()){ toast("Google Sheets n’est pas encore configuré"); return; }
   if(!(await ask(`Envoyer les ${state.sales.length} ventes vers Google Sheets\u202f?`, {ok:"Envoyer"}))) return;
-  const q = loadQ(); state.sales.slice().sort((a,b)=>a.at-b.at).forEach(s=>q.push({type:"sale", sale:s})); saveQ(q);
+  const q = loadQ(); q.push(menuMsg(state.items)); state.sales.slice().sort((a,b)=>a.at-b.at).forEach(s=>q.push({type:"sale", sale:s})); saveQ(q);
   toast("Envoi en cours…"); flushQ();
 };
 
