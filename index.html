@@ -277,8 +277,8 @@ const LS = "snacktill:v1";
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,8);
 
 /* ---------- Google Sheets ---------- */
-const SHEET_URL = "COLLER_ICI_L_URL_DU_WEB_APP";   // https://script.google.com/macros/s/.../exec
-const SHEET_SECRET = "CHANGE_MOI";                  // same value as SECRET in the Apps Script
+const SHEET_URL = "https://script.google.com/macros/s/AKfycbxp6s3Zx28jpkOkmTRDohEVyneyp_8LG4w21BWjXUmK-K7Zh9Q7xD35tUiQMMvrvJUn/exec";   // https://script.google.com/macros/s/.../exec
+const SHEET_SECRET = "poupeye2026";                  // same value as SECRET in the Apps Script
 const QK = "snacktill:queue";
 let flushing = false;
 const sheetOn = () => /^https:\/\/script\.google\.com\//.test(SHEET_URL);
